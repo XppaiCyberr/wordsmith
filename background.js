@@ -1,10 +1,11 @@
 // background.js - Service Worker
 
-importScripts("menu-defaults.js");
+importScripts("menu-defaults.js", "provider-defaults.js");
 
-const GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions";
-const GROQ_MODEL = "llama-3.3-70b-versatile";
 const MENU_ITEMS_STORAGE_KEY = "menuItems";
+const AI_PROVIDER_STORAGE_KEY = "aiProvider";
+const PROVIDER_SETTINGS_STORAGE_KEY = "providerSettings";
+const LEGACY_API_KEY_STORAGE_KEY = "apiKey";
 let rebuildContextMenusQueue = Promise.resolve();
 
 function cloneDefaultMenuItems() {
@@ -47,6 +48,98 @@ async function ensureMenuItemsConfigured() {
   }
 }
 
+function cloneProviderSettingsDefaults() {
+  return Object.fromEntries(
+    Object.entries(globalThis.PROVIDER_CONFIG).map(([provider, config]) => [
+      provider,
+      {
+        apiKey: "",
+        model: config.defaultModel,
+        baseUrl: config.defaultBaseUrl,
+      },
+    ])
+  );
+}
+
+function sanitizeProvider(provider) {
+  return globalThis.PROVIDER_CONFIG[provider] ? provider : globalThis.DEFAULT_AI_PROVIDER;
+}
+
+function sanitizeProviderSettings(settings, legacyApiKey = "") {
+  const defaults = cloneProviderSettingsDefaults();
+  const source = settings && typeof settings === "object" ? settings : {};
+
+  Object.keys(defaults).forEach(provider => {
+    const providerSettings = source[provider] && typeof source[provider] === "object"
+      ? source[provider]
+      : {};
+
+    defaults[provider] = {
+      apiKey: typeof providerSettings.apiKey === "string" ? providerSettings.apiKey.trim() : "",
+      model: typeof providerSettings.model === "string" && providerSettings.model.trim()
+        ? providerSettings.model.trim()
+        : defaults[provider].model,
+      baseUrl: typeof providerSettings.baseUrl === "string" && providerSettings.baseUrl.trim()
+        ? normalizeBaseUrl(providerSettings.baseUrl)
+        : defaults[provider].baseUrl,
+    };
+  });
+
+  if (legacyApiKey && !defaults.groq.apiKey) {
+    defaults.groq.apiKey = legacyApiKey.trim();
+  }
+
+  return defaults;
+}
+
+async function ensureProviderSettingsConfigured() {
+  const stored = await chrome.storage.sync.get([
+    AI_PROVIDER_STORAGE_KEY,
+    PROVIDER_SETTINGS_STORAGE_KEY,
+    LEGACY_API_KEY_STORAGE_KEY,
+  ]);
+
+  const provider = sanitizeProvider(stored[AI_PROVIDER_STORAGE_KEY]);
+  const providerSettings = sanitizeProviderSettings(
+    stored[PROVIDER_SETTINGS_STORAGE_KEY],
+    stored[LEGACY_API_KEY_STORAGE_KEY]
+  );
+
+  const updates = {};
+
+  if (stored[AI_PROVIDER_STORAGE_KEY] !== provider) {
+    updates[AI_PROVIDER_STORAGE_KEY] = provider;
+  }
+
+  if (!stored[PROVIDER_SETTINGS_STORAGE_KEY]) {
+    updates[PROVIDER_SETTINGS_STORAGE_KEY] = providerSettings;
+  }
+
+  if (Object.keys(updates).length) {
+    await chrome.storage.sync.set(updates);
+  }
+}
+
+async function getAiConfig() {
+  const stored = await chrome.storage.sync.get([
+    AI_PROVIDER_STORAGE_KEY,
+    PROVIDER_SETTINGS_STORAGE_KEY,
+    LEGACY_API_KEY_STORAGE_KEY,
+  ]);
+
+  const provider = sanitizeProvider(stored[AI_PROVIDER_STORAGE_KEY]);
+  const allSettings = sanitizeProviderSettings(
+    stored[PROVIDER_SETTINGS_STORAGE_KEY],
+    stored[LEGACY_API_KEY_STORAGE_KEY]
+  );
+
+  return {
+    provider,
+    providerConfig: globalThis.PROVIDER_CONFIG[provider],
+    settings: allSettings[provider],
+  };
+}
+
 function removeAllContextMenus() {
   return new Promise(resolve => chrome.contextMenus.removeAll(resolve));
 }
@@ -84,7 +177,10 @@ function queueContextMenuRebuild() {
 }
 
 chrome.runtime.onInstalled.addListener(() => {
-  ensureMenuItemsConfigured().then(queueContextMenuRebuild);
+  Promise.all([
+    ensureMenuItemsConfigured(),
+    ensureProviderSettingsConfigured(),
+  ]).then(queueContextMenuRebuild);
 });
 
 chrome.runtime.onStartup.addListener(() => {
@@ -123,60 +219,7 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
   });
 
   try {
-    // Get the API key from storage
-    const { apiKey } = await chrome.storage.sync.get("apiKey");
-
-    if (!apiKey) {
-      chrome.tabs.sendMessage(tab.id, {
-        type: "SHOW_ERROR",
-        error: "No API key set. Click the extension icon to add your Groq API key.",
-      });
-      return;
-    }
-
-    if (!apiKey.startsWith("gsk_")) {
-      chrome.tabs.sendMessage(tab.id, {
-        type: "SHOW_ERROR",
-        error: "Invalid Groq API key. Groq keys should start with gsk_.",
-      });
-      return;
-    }
-
-    const response = await fetch(GROQ_API_URL, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "Authorization": `Bearer ${apiKey}`,
-      },
-      body: JSON.stringify({
-        model: GROQ_MODEL,
-        max_completion_tokens: 1024,
-        temperature: 0.2,
-        messages: [
-          {
-            role: "user",
-            content: menuItem.prompt + selectedText,
-          },
-        ],
-      }),
-    });
-
-    if (!response.ok) {
-      const errorText = await response.text();
-      let errorMessage = "Groq API request failed";
-
-      try {
-        const err = JSON.parse(errorText);
-        errorMessage = err?.error?.message || errorMessage;
-      } catch (_) {
-        if (errorText) errorMessage = errorText;
-      }
-
-      throw new Error(errorMessage);
-    }
-
-    const data = await response.json();
-    const result = data.choices?.[0]?.message?.content?.trim() || "";
+    const result = await generateText(menuItem.prompt + selectedText);
 
     chrome.tabs.sendMessage(tab.id, {
       type: "SHOW_RESULT",
@@ -191,3 +234,154 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
     });
   }
 });
+
+async function generateText(prompt) {
+  const aiConfig = await getAiConfig();
+  validateAiConfig(aiConfig);
+
+  if (aiConfig.provider === "anthropic") {
+    return generateAnthropicText(prompt, aiConfig);
+  }
+
+  return generateOpenAiCompatibleText(prompt, aiConfig);
+}
+
+function validateAiConfig({ provider, providerConfig, settings }) {
+  if (providerConfig.apiKeyRequired && !settings.apiKey) {
+    throw new Error(`No API key set. Click the extension icon to add your ${providerConfig.label} API key.`);
+  }
+
+  if (
+    providerConfig.apiKeyPrefix &&
+    settings.apiKey &&
+    !settings.apiKey.startsWith(providerConfig.apiKeyPrefix)
+  ) {
+    throw new Error(`${providerConfig.label} keys should start with ${providerConfig.apiKeyPrefix}.`);
+  }
+
+  if (!settings.model) {
+    throw new Error(`No model set for ${providerConfig.label}.`);
+  }
+
+  if (provider === "local" && !settings.baseUrl) {
+    throw new Error("No local AI base URL set.");
+  }
+}
+
+async function generateOpenAiCompatibleText(prompt, { provider, providerConfig, settings }) {
+  const headers = {
+    "Content-Type": "application/json",
+  };
+
+  if (settings.apiKey) {
+    headers.Authorization = `Bearer ${settings.apiKey}`;
+  }
+
+  const body = {
+    model: settings.model,
+    temperature: 0.2,
+    messages: [
+      {
+        role: "user",
+        content: prompt,
+      },
+    ],
+  };
+
+  if (provider === "local") {
+    body.max_tokens = 1024;
+  } else {
+    body.max_completion_tokens = 1024;
+  }
+
+  const response = await fetch(buildChatCompletionsUrl(settings.baseUrl), {
+    method: "POST",
+    headers,
+    body: JSON.stringify(body),
+  });
+
+  if (!response.ok) {
+    throw new Error(await getProviderErrorMessage(response, providerConfig.label));
+  }
+
+  const data = await response.json();
+  const result = data.choices?.[0]?.message?.content?.trim() || "";
+
+  if (!result) {
+    throw new Error(`${providerConfig.label} returned an empty response.`);
+  }
+
+  return result;
+}
+
+async function generateAnthropicText(prompt, { providerConfig, settings }) {
+  const response = await fetch(`${settings.baseUrl}/messages`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "x-api-key": settings.apiKey,
+      "anthropic-version": "2023-06-01",
+      "anthropic-dangerous-direct-browser-access": "true",
+    },
+    body: JSON.stringify({
+      model: settings.model,
+      max_tokens: 1024,
+      temperature: 0.2,
+      messages: [
+        {
+          role: "user",
+          content: prompt,
+        },
+      ],
+    }),
+  });
+
+  if (!response.ok) {
+    throw new Error(await getProviderErrorMessage(response, providerConfig.label));
+  }
+
+  const data = await response.json();
+  const result = data.content
+    ?.filter(part => part?.type === "text")
+    .map(part => part.text)
+    .join("")
+    .trim() || "";
+
+  if (!result) {
+    throw new Error(`${providerConfig.label} returned an empty response.`);
+  }
+
+  return result;
+}
+
+async function getProviderErrorMessage(response, providerLabel) {
+  const errorText = await response.text();
+  let errorMessage = `${providerLabel} API request failed`;
+
+  try {
+    const err = JSON.parse(errorText);
+    errorMessage = err?.error?.message || err?.message || errorMessage;
+  } catch (_) {
+    if (errorText) errorMessage = errorText;
+  }
+
+  return errorMessage;
+}
+
+function buildChatCompletionsUrl(baseUrl) {
+  const normalizedBaseUrl = normalizeBaseUrl(baseUrl);
+
+  if (normalizedBaseUrl.endsWith("/chat/completions")) {
+    return normalizedBaseUrl;
+  }
+
+  if (normalizedBaseUrl.endsWith("/v1")) {
+    return `${normalizedBaseUrl}/chat/completions`;
+  }
+
+  return `${normalizedBaseUrl}/v1/chat/completions`;
+}
+
+function normalizeBaseUrl(baseUrl) {
+  return String(baseUrl || "").trim().replace(/\/+$/, "");
+}

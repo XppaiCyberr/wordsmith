@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Wordsmith",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Highlight any text, right-click, and instantly polish it with Wordsmith.",
   "permissions": [
     "contextMenus",
@@ -10,7 +10,11 @@
     "storage"
   ],
   "host_permissions": [
-    "https://api.groq.com/*"
+    "https://api.groq.com/*",
+    "https://api.openai.com/*",
+    "https://api.anthropic.com/*",
+    "http://localhost/*",
+    "http://127.0.0.1/*"
   ],
   "background": {
     "service_worker": "background.js"

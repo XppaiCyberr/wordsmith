@@ -1,6 +1,12 @@
 // popup.js
 
 const keyInput = document.getElementById("api-key");
+const apiKeyLabel = document.getElementById("api-key-label");
+const providerSelect = document.getElementById("ai-provider");
+const providerSubtitle = document.getElementById("provider-subtitle");
+const modelInput = document.getElementById("model-input");
+const baseUrlGroup = document.getElementById("base-url-group");
+const baseUrlInput = document.getElementById("base-url-input");
 const saveBtn  = document.getElementById("save-btn");
 const status   = document.getElementById("status");
 const menuList = document.getElementById("menu-list");
@@ -10,19 +16,35 @@ const customPrompt = document.getElementById("custom-prompt");
 const addMenuBtn = document.getElementById("add-menu-btn");
 const resetMenuBtn = document.getElementById("reset-menu-btn");
 const MENU_ITEMS_STORAGE_KEY = "menuItems";
+const AI_PROVIDER_STORAGE_KEY = "aiProvider";
+const PROVIDER_SETTINGS_STORAGE_KEY = "providerSettings";
+const LEGACY_API_KEY_STORAGE_KEY = "apiKey";
 
 let menuItems = [];
+let selectedProvider = globalThis.DEFAULT_AI_PROVIDER;
+let providerSettings = {};
 
-chrome.storage.sync.get(["apiKey", MENU_ITEMS_STORAGE_KEY], ({ apiKey, menuItems: storedMenuItems }) => {
-  if (apiKey?.startsWith("gsk_")) {
-    keyInput.value = apiKey;
-    setStatus("API key saved", false);
-  } else if (apiKey) {
-    setStatus("Enter a Groq API key.", true);
-  }
+chrome.storage.sync.get([
+  LEGACY_API_KEY_STORAGE_KEY,
+  AI_PROVIDER_STORAGE_KEY,
+  PROVIDER_SETTINGS_STORAGE_KEY,
+  MENU_ITEMS_STORAGE_KEY,
+], ({
+  apiKey,
+  aiProvider,
+  providerSettings: storedProviderSettings,
+  menuItems: storedMenuItems,
+}) => {
+  selectedProvider = sanitizeProvider(aiProvider);
+  providerSettings = sanitizeProviderSettings(storedProviderSettings, apiKey);
 
+  renderProviderSettings();
   menuItems = sanitizeMenuItems(storedMenuItems);
   renderMenuItems();
+
+  if (!storedProviderSettings || aiProvider !== selectedProvider) {
+    saveProviderSettings({ quiet: true });
+  }
 
   if (!Array.isArray(storedMenuItems)) {
     saveMenuItems({ quiet: true });
@@ -30,23 +52,130 @@ chrome.storage.sync.get(["apiKey", MENU_ITEMS_STORAGE_KEY], ({ apiKey, menuItems
 });
 
 saveBtn.addEventListener("click", () => {
-  const key = keyInput.value.trim();
-  if (!key) {
-    setStatus("Please enter a valid API key.", true);
-    return;
-  }
-  if (!key.startsWith("gsk_")) {
-    setStatus("Key should start with gsk_...", true);
-    return;
-  }
-  chrome.storage.sync.set({ apiKey: key }, () => {
-    setStatus("Saved. You're ready to go.", false);
-  });
+  saveProviderSettings();
 });
 
 function setStatus(msg, isError) {
   status.textContent = msg;
   status.className = "status" + (isError ? " error" : "");
+}
+
+providerSelect.addEventListener("change", () => {
+  updateCurrentProviderSettingsFromInputs();
+  selectedProvider = sanitizeProvider(providerSelect.value);
+  renderProviderSettings();
+  setStatus("", false);
+});
+
+function cloneProviderSettingsDefaults() {
+  return Object.fromEntries(
+    Object.entries(globalThis.PROVIDER_CONFIG).map(([provider, config]) => [
+      provider,
+      {
+        apiKey: "",
+        model: config.defaultModel,
+        baseUrl: config.defaultBaseUrl,
+      },
+    ])
+  );
+}
+
+function sanitizeProvider(provider) {
+  return globalThis.PROVIDER_CONFIG[provider] ? provider : globalThis.DEFAULT_AI_PROVIDER;
+}
+
+function sanitizeProviderSettings(settings, legacyApiKey = "") {
+  const defaults = cloneProviderSettingsDefaults();
+  const source = settings && typeof settings === "object" ? settings : {};
+
+  Object.keys(defaults).forEach(provider => {
+    const providerSettings = source[provider] && typeof source[provider] === "object"
+      ? source[provider]
+      : {};
+
+    defaults[provider] = {
+      apiKey: typeof providerSettings.apiKey === "string" ? providerSettings.apiKey.trim() : "",
+      model: typeof providerSettings.model === "string" && providerSettings.model.trim()
+        ? providerSettings.model.trim()
+        : defaults[provider].model,
+      baseUrl: typeof providerSettings.baseUrl === "string" && providerSettings.baseUrl.trim()
+        ? normalizeBaseUrl(providerSettings.baseUrl)
+        : defaults[provider].baseUrl,
+    };
+  });
+
+  if (legacyApiKey && !defaults.groq.apiKey) {
+    defaults.groq.apiKey = legacyApiKey.trim();
+  }
+
+  return defaults;
+}
+
+function renderProviderSettings() {
+  const config = globalThis.PROVIDER_CONFIG[selectedProvider];
+  const settings = providerSettings[selectedProvider] || {};
+
+  providerSelect.value = selectedProvider;
+  providerSubtitle.textContent = `Provider: ${config.label}`;
+  apiKeyLabel.textContent = config.apiKeyLabel;
+  keyInput.placeholder = config.apiKeyPlaceholder;
+  keyInput.value = settings.apiKey || "";
+  modelInput.value = settings.model || config.defaultModel;
+  baseUrlInput.value = settings.baseUrl || config.defaultBaseUrl;
+  baseUrlGroup.hidden = !config.showBaseUrl;
+}
+
+function updateCurrentProviderSettingsFromInputs() {
+  providerSettings[selectedProvider] = {
+    apiKey: keyInput.value.trim(),
+    model: modelInput.value.trim(),
+    baseUrl: normalizeBaseUrl(baseUrlInput.value || globalThis.PROVIDER_CONFIG[selectedProvider].defaultBaseUrl),
+  };
+}
+
+function saveProviderSettings(options = {}) {
+  updateCurrentProviderSettingsFromInputs();
+  providerSettings = sanitizeProviderSettings(providerSettings);
+
+  const config = globalThis.PROVIDER_CONFIG[selectedProvider];
+  const settings = providerSettings[selectedProvider];
+
+  if (!options.quiet) {
+    if (config.apiKeyRequired && !settings.apiKey) {
+      setStatus(`Please enter a ${config.label} API key.`, true);
+      return;
+    }
+
+    if (config.apiKeyPrefix && settings.apiKey && !settings.apiKey.startsWith(config.apiKeyPrefix)) {
+      setStatus(`${config.label} keys should start with ${config.apiKeyPrefix}.`, true);
+      return;
+    }
+
+    if (!settings.model) {
+      setStatus(`Please enter a ${config.label} model.`, true);
+      return;
+    }
+
+    if (config.showBaseUrl && !settings.baseUrl) {
+      setStatus("Please enter a local AI base URL.", true);
+      return;
+    }
+  }
+
+  chrome.storage.sync.set({
+    [AI_PROVIDER_STORAGE_KEY]: selectedProvider,
+    [PROVIDER_SETTINGS_STORAGE_KEY]: providerSettings,
+    [LEGACY_API_KEY_STORAGE_KEY]: providerSettings.groq.apiKey,
+  }, () => {
+    if (chrome.runtime.lastError) {
+      setStatus(chrome.runtime.lastError.message, true);
+      return;
+    }
+
+    if (!options.quiet) {
+      setStatus(`${config.label} settings saved.`, false);
+    }
+  });
 }
 
 menuList.addEventListener("click", (event) => {
@@ -199,4 +328,8 @@ function setMenuStatus(msg, isError) {
 function createCustomMenuId() {
   const random = Math.random().toString(36).slice(2, 8);
   return `custom-${Date.now().toString(36)}-${random}`;
+}
+
+function normalizeBaseUrl(baseUrl) {
+  return String(baseUrl || "").trim().replace(/\/+$/, "");
 }

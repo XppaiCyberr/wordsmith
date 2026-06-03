@@ -55,6 +55,7 @@
 
     input[type="password"],
     input[type="text"],
+    select,
     textarea {
       width: 100%;
       background: rgba(255,255,255,0.05);
@@ -66,6 +67,11 @@
       outline: none;
       font-family: monospace;
       transition: border-color 0.15s;
+    }
+
+    select {
+      font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+      cursor: pointer;
     }
 
     textarea {
@@ -308,16 +314,33 @@
     <span class="header-icon">AI</span>
     <div class="header-text">
       <h1>Wordsmith</h1>
-      <p>Powered by Groq</p>
+      <p id="provider-subtitle">Choose an AI provider</p>
     </div>
   </div>
 
   <div class="body">
     <div>
-      <label>Groq API Key</label>
+      <label>AI Provider</label>
+      <select id="ai-provider">
+        <option value="groq">Groq</option>
+        <option value="openai">OpenAI</option>
+        <option value="anthropic">Anthropic</option>
+        <option value="local">Local AI</option>
+      </select>
+    </div>
+    <div>
+      <label id="api-key-label">API Key</label>
       <input type="password" id="api-key" placeholder="gsk_..." spellcheck="false" />
     </div>
-    <button class="save-btn" id="save-btn">Save Key</button>
+    <div>
+      <label>Model</label>
+      <input type="text" id="model-input" spellcheck="false" />
+    </div>
+    <div id="base-url-group" hidden>
+      <label>Base URL</label>
+      <input type="text" id="base-url-input" spellcheck="false" />
+    </div>
+    <button class="save-btn" id="save-btn">Save AI Settings</button>
     <div class="status" id="status"></div>
   </div>
 
@@ -352,7 +375,7 @@
     <div class="steps">
       <div class="step">
         <div class="step-num">1</div>
-        <div class="step-text">Get a free API key at <a href="https://console.groq.com/keys" target="_blank">console.groq.com/keys</a></div>
+        <div class="step-text">Choose an AI provider and save its settings</div>
       </div>
       <div class="step">
         <div class="step-num">2</div>
@@ -382,6 +405,7 @@
   </div>
 
   <script src="menu-defaults.js"></script>
+  <script src="provider-defaults.js"></script>
   <script src="popup.js"></script>
 </body>
 </html>
