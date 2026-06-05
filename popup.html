@@ -143,6 +143,59 @@
 
     .status.error { color: #f87171; }
 
+    .model-status {
+      padding: 9px 10px;
+      background: rgba(255,255,255,0.04);
+      border: 1px solid rgba(255,255,255,0.08);
+      border-radius: 8px;
+    }
+
+    .model-status-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      min-width: 0;
+    }
+
+    .model-status-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      flex: 0 0 auto;
+      background: rgba(255,255,255,0.32);
+    }
+
+    .model-status-dot.ready {
+      background: #5fba7d;
+      box-shadow: 0 0 0 3px rgba(95, 186, 125, 0.15);
+    }
+
+    .model-status-dot.loading {
+      background: #fbbf24;
+      box-shadow: 0 0 0 3px rgba(251, 191, 36, 0.13);
+    }
+
+    .model-status-dot.error {
+      background: #f87171;
+      box-shadow: 0 0 0 3px rgba(248, 113, 113, 0.13);
+    }
+
+    .model-status-text {
+      min-width: 0;
+      font-size: 12px;
+      line-height: 1.35;
+      color: rgba(255,255,255,0.78);
+      overflow-wrap: anywhere;
+    }
+
+    .model-status-meta {
+      margin-top: 5px;
+      font-size: 11px;
+      line-height: 1.4;
+      color: rgba(255,255,255,0.42);
+      overflow-wrap: anywhere;
+    }
+
     .divider {
       height: 1px;
       background: rgba(255,255,255,0.07);
@@ -336,6 +389,13 @@
     <div>
       <label>Model</label>
       <input type="text" id="model-input" spellcheck="false" />
+    </div>
+    <div class="model-status" id="model-status-group" hidden>
+      <div class="model-status-row">
+        <span class="model-status-dot" id="model-status-dot"></span>
+        <span class="model-status-text" id="model-status-text">Checking SmolLM2 status...</span>
+      </div>
+      <div class="model-status-meta" id="model-status-meta"></div>
     </div>
     <div id="base-url-group" hidden>
       <label>Base URL</label>

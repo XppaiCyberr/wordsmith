@@ -9,12 +9,15 @@ const AI_PROVIDER_STORAGE_KEY = "aiProvider";
 const PROVIDER_SETTINGS_STORAGE_KEY = "providerSettings";
 const LEGACY_API_KEY_STORAGE_KEY = "apiKey";
 const HUGGING_FACE_PROVIDER = "huggingface";
+const HUGGING_FACE_STATUS_MESSAGE = "GET_SMOLLM2_STATUS";
+const HUGGING_FACE_CACHE_NAME = "transformers-cache";
 const HUGGING_FACE_DTYPE = "q4";
 const HUGGING_FACE_MAX_NEW_TOKENS = 512;
 let rebuildContextMenusQueue = Promise.resolve();
 let huggingFaceGeneratorPromise = null;
 let huggingFaceGeneratorModel = "";
 let huggingFaceGenerationQueue = Promise.resolve();
+let huggingFaceStatus = createHuggingFaceStatus();
 
 configureTransformersEnvironment();
 
@@ -210,6 +213,14 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     return true;
   }
 
+  if (message?.type === HUGGING_FACE_STATUS_MESSAGE) {
+    getHuggingFaceStatus({ warm: Boolean(message.warm) })
+      .then(status => sendResponse({ ok: true, status }))
+      .catch(error => sendResponse({ ok: false, error: error.message }));
+
+    return true;
+  }
+
   if (message?.type === "REWRITE_TEXT") {
     handleRewriteTextMessage(message, _sender, sendResponse);
     return true;
@@ -238,26 +249,27 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
   if (!menuItem || !info.selectionText) return;
 
   const selectedText = info.selectionText.trim();
+  const tabId = tab?.id;
 
   // Tell the content script to show loading state
-  chrome.tabs.sendMessage(tab.id, {
+  sendTabMessage(tabId, {
     type: "SHOW_LOADING",
     originalText: selectedText,
     action: menuItem.title,
   });
 
   try {
-    const streamChunk = createTabStreamChunkSender(tab.id, selectedText, menuItem.title);
+    const streamChunk = createTabStreamChunkSender(tabId, selectedText, menuItem.title);
     const result = await generateText(menuItem.prompt + selectedText, streamChunk);
 
-    chrome.tabs.sendMessage(tab.id, {
+    sendTabMessage(tabId, {
       type: "SHOW_RESULT",
       originalText: selectedText,
       resultText: result,
       action: menuItem.title,
     });
   } catch (err) {
-    chrome.tabs.sendMessage(tab.id, {
+    sendTabMessage(tabId, {
       type: "SHOW_ERROR",
       error: err.message,
     });
@@ -374,6 +386,148 @@ function queueHuggingFaceGeneration(task) {
   return huggingFaceGenerationQueue;
 }
 
+function createHuggingFaceStatus(model = PROVIDER_CONFIG[HUGGING_FACE_PROVIDER].defaultModel) {
+  return {
+    model,
+    downloaded: false,
+    ready: false,
+    loading: false,
+    device: "",
+    progress: null,
+    cacheChecked: false,
+    cachedFiles: 0,
+    fallback: false,
+    fallbackReason: "",
+    error: "",
+    updatedAt: 0,
+  };
+}
+
+function setHuggingFaceStatus(patch) {
+  huggingFaceStatus = {
+    ...huggingFaceStatus,
+    ...patch,
+    updatedAt: Date.now(),
+  };
+}
+
+function resetHuggingFaceStatus(model, patch = {}) {
+  huggingFaceStatus = {
+    ...createHuggingFaceStatus(model),
+    ...patch,
+    updatedAt: Date.now(),
+  };
+}
+
+async function getHuggingFaceStatus({ warm = false } = {}) {
+  const stored = await chrome.storage.sync.get([
+    AI_PROVIDER_STORAGE_KEY,
+    PROVIDER_SETTINGS_STORAGE_KEY,
+    LEGACY_API_KEY_STORAGE_KEY,
+  ]);
+  const selectedProvider = sanitizeProvider(stored[AI_PROVIDER_STORAGE_KEY]);
+  const providerSettings = sanitizeProviderSettings(
+    stored[PROVIDER_SETTINGS_STORAGE_KEY],
+    stored[LEGACY_API_KEY_STORAGE_KEY]
+  );
+  const modelId = providerSettings[HUGGING_FACE_PROVIDER].model ||
+    PROVIDER_CONFIG[HUGGING_FACE_PROVIDER].defaultModel;
+
+  if (huggingFaceStatus.model !== modelId) {
+    resetHuggingFaceStatus(modelId);
+  }
+
+  if (warm && selectedProvider === HUGGING_FACE_PROVIDER && !huggingFaceStatus.ready) {
+    void getHuggingFaceGenerator(modelId).catch(error => {
+      console.warn("SmolLM2 status warmup failed.", error);
+    });
+  }
+
+  const cacheInfo = await getHuggingFaceCacheInfo(modelId);
+
+  setHuggingFaceStatus({
+    model: modelId,
+    cacheChecked: cacheInfo.cacheChecked,
+    cachedFiles: cacheInfo.cachedFiles,
+    downloaded: huggingFaceStatus.ready || huggingFaceStatus.downloaded || cacheInfo.downloaded,
+    loading: huggingFaceStatus.loading || (
+      Boolean(huggingFaceGeneratorPromise) &&
+      huggingFaceGeneratorModel === modelId &&
+      !huggingFaceStatus.ready &&
+      !huggingFaceStatus.error
+    ),
+  });
+
+  return { ...huggingFaceStatus };
+}
+
+async function getHuggingFaceCacheInfo(modelId) {
+  if (!("caches" in globalThis)) {
+    return { cacheChecked: false, cachedFiles: 0, downloaded: false };
+  }
+
+  try {
+    const cache = await caches.open(HUGGING_FACE_CACHE_NAME);
+    const requests = await cache.keys();
+    const modelNeedle = modelId.toLowerCase();
+    const encodedModelNeedle = encodeURIComponent(modelId).toLowerCase();
+    const cachedFiles = requests.filter(request => {
+      const url = request.url.toLowerCase();
+      return url.includes(modelNeedle) || url.includes(encodedModelNeedle);
+    }).length;
+
+    return {
+      cacheChecked: true,
+      cachedFiles,
+      downloaded: cachedFiles > 0,
+    };
+  } catch (error) {
+    console.warn("Could not inspect SmolLM2 cache.", error);
+    return { cacheChecked: false, cachedFiles: 0, downloaded: false };
+  }
+}
+
+function handleHuggingFaceProgress(progress, modelId, device) {
+  if (!progress?.status) return;
+
+  const normalizedProgress = normalizeHuggingFaceProgress(progress);
+
+  if (progress.status === "ready") {
+    console.debug(`SmolLM2 ${device} pipeline ready.`);
+    setHuggingFaceStatus({
+      model: modelId,
+      downloaded: true,
+      ready: true,
+      loading: false,
+      device,
+      progress: null,
+      error: "",
+    });
+    return;
+  }
+
+  if (["initiate", "download", "progress", "done"].includes(progress.status)) {
+    setHuggingFaceStatus({
+      model: modelId,
+      ready: false,
+      loading: true,
+      device,
+      progress: normalizedProgress,
+      error: "",
+    });
+  }
+}
+
+function normalizeHuggingFaceProgress(progress) {
+  return {
+    status: progress.status,
+    file: progress.file || progress.name || "",
+    progress: Number.isFinite(progress.progress) ? progress.progress : null,
+    loaded: Number.isFinite(progress.loaded) ? progress.loaded : null,
+    total: Number.isFinite(progress.total) ? progress.total : null,
+  };
+}
+
 async function getHuggingFaceGenerator(model) {
   const modelId = model || PROVIDER_CONFIG[HUGGING_FACE_PROVIDER].defaultModel;
 
@@ -382,14 +536,47 @@ async function getHuggingFaceGenerator(model) {
   }
 
   huggingFaceGeneratorModel = modelId;
+  resetHuggingFaceStatus(modelId, {
+    loading: true,
+    device: "webgpu",
+  });
+
   huggingFaceGeneratorPromise = loadHuggingFaceGenerator(modelId, "webgpu")
     .catch(async webgpuError => {
       console.warn("SmolLM2 WebGPU initialization failed. Falling back to wasm.", webgpuError);
+      setHuggingFaceStatus({
+        model: modelId,
+        ready: false,
+        loading: true,
+        device: "wasm",
+        fallback: true,
+        fallbackReason: getErrorMessage(webgpuError),
+        error: "",
+      });
       return loadHuggingFaceGenerator(modelId, "wasm");
+    })
+    .then(result => {
+      setHuggingFaceStatus({
+        model: modelId,
+        downloaded: true,
+        ready: true,
+        loading: false,
+        device: result.device,
+        progress: null,
+        error: "",
+      });
+      return result;
     })
     .catch(error => {
       huggingFaceGeneratorPromise = null;
       huggingFaceGeneratorModel = "";
+      setHuggingFaceStatus({
+        model: modelId,
+        ready: false,
+        loading: false,
+        progress: null,
+        error: getErrorMessage(error),
+      });
       throw error;
     });
 
@@ -404,9 +591,7 @@ async function loadHuggingFaceGenerator(modelId, device) {
       device,
       dtype: HUGGING_FACE_DTYPE,
       progress_callback: progress => {
-        if (progress?.status === "ready") {
-          console.debug(`SmolLM2 ${device} pipeline ready.`);
-        }
+        handleHuggingFaceProgress(progress, modelId, device);
       },
     }
   );
@@ -572,6 +757,10 @@ async function getProviderErrorMessage(response, providerLabel) {
   }
 
   return errorMessage;
+}
+
+function getErrorMessage(error) {
+  return error?.message || String(error || "Unknown error.");
 }
 
 function buildChatCompletionsUrl(baseUrl) {

@@ -53,6 +53,7 @@ The `SmolLM2 Local` provider runs entirely in Chrome's MV3 background service wo
 - First use downloads `HuggingFaceTB/SmolLM2-360M-Instruct` from Hugging Face and caches model files through the browser Cache API.
 - The service worker warms the model on extension startup when `SmolLM2 Local` is the selected provider.
 - Generation tries WebGPU first with `{ device: "webgpu" }` and falls back to wasm with `{ device: "wasm" }` if WebGPU initialization fails.
+- The popup shows whether SmolLM2 files are cached/downloaded and whether the in-memory pipeline is ready.
 - Output streams into the result modal as tokens are generated.
 
 For Ollama, use:
@@ -141,6 +142,7 @@ Created by XppaiCyber.
 ### 1.1.0
 
 - Added SmolLM2 Local provider powered by `@huggingface/transformers` v3, WebGPU, and wasm fallback.
+- Added popup status for SmolLM2 cache/download and pipeline readiness.
 - Added AI provider selection for Groq, OpenAI, Anthropic, and local OpenAI-compatible servers.
 - Added model and local base URL settings in the popup.
 - Expanded extension permissions for the supported AI providers.
