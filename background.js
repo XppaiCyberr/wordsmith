@@ -785,6 +785,7 @@ function configureTransformersEnvironment() {
   env.allowLocalModels = false;
   env.allowRemoteModels = true;
   env.useBrowserCache = true;
+  env.backends.onnx.logLevel = "error";
   env.backends.onnx.wasm ??= {};
   env.backends.onnx.wasm.proxy = false;
 }
