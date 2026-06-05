@@ -1,6 +1,6 @@
-globalThis.DEFAULT_AI_PROVIDER = "groq";
+export const DEFAULT_AI_PROVIDER = "groq";
 
-globalThis.PROVIDER_CONFIG = {
+export const PROVIDER_CONFIG = {
   groq: {
     label: "Groq",
     apiKeyLabel: "Groq API Key",

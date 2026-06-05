@@ -1,4 +1,4 @@
-globalThis.DEFAULT_MENU_ITEMS = [
+export const DEFAULT_MENU_ITEMS = [
   {
     id: "refactor",
     title: "Refactor & Improve",

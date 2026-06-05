@@ -1,6 +1,7 @@
 // background.js - Service Worker
 
-importScripts("menu-defaults.js", "provider-defaults.js");
+import { DEFAULT_MENU_ITEMS } from "./menu-defaults.js";
+import { DEFAULT_AI_PROVIDER, PROVIDER_CONFIG } from "./provider-defaults.js";
 
 const MENU_ITEMS_STORAGE_KEY = "menuItems";
 const AI_PROVIDER_STORAGE_KEY = "aiProvider";
@@ -9,7 +10,7 @@ const LEGACY_API_KEY_STORAGE_KEY = "apiKey";
 let rebuildContextMenusQueue = Promise.resolve();
 
 function cloneDefaultMenuItems() {
-  return globalThis.DEFAULT_MENU_ITEMS.map(item => ({ ...item }));
+  return DEFAULT_MENU_ITEMS.map(item => ({ ...item }));
 }
 
 function sanitizeMenuItems(items) {
@@ -50,7 +51,7 @@ async function ensureMenuItemsConfigured() {
 
 function cloneProviderSettingsDefaults() {
   return Object.fromEntries(
-    Object.entries(globalThis.PROVIDER_CONFIG).map(([provider, config]) => [
+    Object.entries(PROVIDER_CONFIG).map(([provider, config]) => [
       provider,
       {
         apiKey: "",
@@ -62,7 +63,7 @@ function cloneProviderSettingsDefaults() {
 }
 
 function sanitizeProvider(provider) {
-  return globalThis.PROVIDER_CONFIG[provider] ? provider : globalThis.DEFAULT_AI_PROVIDER;
+  return PROVIDER_CONFIG[provider] ? provider : DEFAULT_AI_PROVIDER;
 }
 
 function sanitizeProviderSettings(settings, legacyApiKey = "") {
@@ -135,7 +136,7 @@ async function getAiConfig() {
 
   return {
     provider,
-    providerConfig: globalThis.PROVIDER_CONFIG[provider],
+    providerConfig: PROVIDER_CONFIG[provider],
     settings: allSettings[provider],
   };
 }

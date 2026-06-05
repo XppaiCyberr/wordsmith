@@ -17,14 +17,15 @@ Current version: `1.1.0`
 
 ## Setup
 
-1. Choose an AI provider in the popup.
-2. Open Chrome and go to `chrome://extensions`.
-3. Enable `Developer mode`.
-4. Click `Load unpacked`.
-5. Select this project folder.
-6. Click the Wordsmith extension icon.
-7. Enter the API key, model, and local base URL if needed.
-8. Click `Save AI Settings`.
+1. Install dependencies with `npm install`.
+2. Start the CRXJS development server with `npm run dev`.
+3. Open Chrome and go to `chrome://extensions`.
+4. Enable `Developer mode`.
+5. Click `Load unpacked`.
+6. Select the generated `dist` directory.
+7. Click the Wordsmith extension icon.
+8. Choose an AI provider, enter the API key, model, and local base URL if needed.
+9. Click `Save AI Settings`.
 
 ## AI Providers
 
@@ -81,13 +82,25 @@ Changes are saved in Chrome sync storage and apply to the right-click menu autom
 
 ## Project Files
 
-- `manifest.json` configures the Chrome extension.
+- `manifest.config.js` defines the Chrome extension manifest for CRXJS.
+- `vite.config.js` configures Vite and the CRXJS plugin.
+- `package.json` contains development, build, and syntax-check scripts.
 - `background.js` creates context menus and calls the selected AI provider.
 - `menu-defaults.js` stores the built-in action definitions.
 - `provider-defaults.js` stores the built-in provider defaults.
 - `popup.html` and `popup.js` handle provider settings and menu customization.
 - `content.js` and `content.css` show the result modal on webpages.
 - `icons/` contains the extension icons.
+
+## CRXJS Migration
+
+Wordsmith was migrated from a root-level unpacked MV3 extension to a CRXJS/Vite project.
+
+- The old `manifest.json` file was removed because CRXJS now generates `dist/manifest.json` from `manifest.config.js`.
+- The background service worker now runs as a module, which lets Vite bundle shared code instead of relying on `importScripts`.
+- `menu-defaults.js` and `provider-defaults.js` now export shared constants that the popup and background worker import directly.
+- `popup.html` now loads `popup.js` as a Vite module entry.
+- Chrome should load the generated `dist` directory, not the repository root.
 
 ## Permissions
 
@@ -123,14 +136,22 @@ Created by XppaiCyber.
 
 ## Development
 
-After editing files, reload the extension from `chrome://extensions`.
+Wordsmith now uses CRXJS and Vite. During development, run:
+
+```powershell
+npm run dev
+```
+
+Then load the generated `dist` directory from `chrome://extensions`.
+
+For production output, run:
+
+```powershell
+npm run build
+```
 
 Quick syntax checks:
 
 ```powershell
-node --check background.js
-node --check content.js
-node --check popup.js
-node --check menu-defaults.js
-node --check provider-defaults.js
+npm run check
 ```

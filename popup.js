@@ -1,5 +1,8 @@
 // popup.js
 
+import { DEFAULT_MENU_ITEMS } from "./menu-defaults.js";
+import { DEFAULT_AI_PROVIDER, PROVIDER_CONFIG } from "./provider-defaults.js";
+
 const keyInput = document.getElementById("api-key");
 const apiKeyLabel = document.getElementById("api-key-label");
 const providerSelect = document.getElementById("ai-provider");
@@ -21,7 +24,7 @@ const PROVIDER_SETTINGS_STORAGE_KEY = "providerSettings";
 const LEGACY_API_KEY_STORAGE_KEY = "apiKey";
 
 let menuItems = [];
-let selectedProvider = globalThis.DEFAULT_AI_PROVIDER;
+let selectedProvider = DEFAULT_AI_PROVIDER;
 let providerSettings = {};
 
 chrome.storage.sync.get([
@@ -69,7 +72,7 @@ providerSelect.addEventListener("change", () => {
 
 function cloneProviderSettingsDefaults() {
   return Object.fromEntries(
-    Object.entries(globalThis.PROVIDER_CONFIG).map(([provider, config]) => [
+    Object.entries(PROVIDER_CONFIG).map(([provider, config]) => [
       provider,
       {
         apiKey: "",
@@ -81,7 +84,7 @@ function cloneProviderSettingsDefaults() {
 }
 
 function sanitizeProvider(provider) {
-  return globalThis.PROVIDER_CONFIG[provider] ? provider : globalThis.DEFAULT_AI_PROVIDER;
+  return PROVIDER_CONFIG[provider] ? provider : DEFAULT_AI_PROVIDER;
 }
 
 function sanitizeProviderSettings(settings, legacyApiKey = "") {
@@ -112,7 +115,7 @@ function sanitizeProviderSettings(settings, legacyApiKey = "") {
 }
 
 function renderProviderSettings() {
-  const config = globalThis.PROVIDER_CONFIG[selectedProvider];
+  const config = PROVIDER_CONFIG[selectedProvider];
   const settings = providerSettings[selectedProvider] || {};
 
   providerSelect.value = selectedProvider;
@@ -129,7 +132,7 @@ function updateCurrentProviderSettingsFromInputs() {
   providerSettings[selectedProvider] = {
     apiKey: keyInput.value.trim(),
     model: modelInput.value.trim(),
-    baseUrl: normalizeBaseUrl(baseUrlInput.value || globalThis.PROVIDER_CONFIG[selectedProvider].defaultBaseUrl),
+    baseUrl: normalizeBaseUrl(baseUrlInput.value || PROVIDER_CONFIG[selectedProvider].defaultBaseUrl),
   };
 }
 
@@ -226,7 +229,7 @@ resetMenuBtn.addEventListener("click", () => {
 });
 
 function cloneDefaultMenuItems() {
-  return globalThis.DEFAULT_MENU_ITEMS.map(item => ({ ...item }));
+  return DEFAULT_MENU_ITEMS.map(item => ({ ...item }));
 }
 
 function sanitizeMenuItems(items) {
