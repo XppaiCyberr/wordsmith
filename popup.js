@@ -4,6 +4,7 @@ import { DEFAULT_MENU_ITEMS } from "./menu-defaults.js";
 import { DEFAULT_AI_PROVIDER, PROVIDER_CONFIG } from "./provider-defaults.js";
 
 const keyInput = document.getElementById("api-key");
+const apiKeyGroup = document.getElementById("api-key-group");
 const apiKeyLabel = document.getElementById("api-key-label");
 const providerSelect = document.getElementById("ai-provider");
 const providerSubtitle = document.getElementById("provider-subtitle");
@@ -123,6 +124,7 @@ function renderProviderSettings() {
   apiKeyLabel.textContent = config.apiKeyLabel;
   keyInput.placeholder = config.apiKeyPlaceholder;
   keyInput.value = settings.apiKey || "";
+  apiKeyGroup.hidden = config.showApiKey === false;
   modelInput.value = settings.model || config.defaultModel;
   baseUrlInput.value = settings.baseUrl || config.defaultBaseUrl;
   baseUrlGroup.hidden = !config.showBaseUrl;
@@ -140,7 +142,7 @@ function saveProviderSettings(options = {}) {
   updateCurrentProviderSettingsFromInputs();
   providerSettings = sanitizeProviderSettings(providerSettings);
 
-  const config = globalThis.PROVIDER_CONFIG[selectedProvider];
+  const config = PROVIDER_CONFIG[selectedProvider];
   const settings = providerSettings[selectedProvider];
 
   if (!options.quiet) {

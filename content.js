@@ -4,6 +4,8 @@ let modal = null;
 
 chrome.runtime.onMessage.addListener((msg) => {
   if (msg.type === "SHOW_LOADING") showModal(msg);
+  if (msg.type === "SHOW_STREAM_START") startStreamingResult(msg);
+  if (msg.type === "SHOW_STREAM_CHUNK") appendStreamingResult(msg);
   if (msg.type === "SHOW_RESULT")  updateModal(msg);
   if (msg.type === "SHOW_ERROR")   showError(msg.error);
 });
@@ -99,6 +101,26 @@ function updateModal({ originalText, resultText, action }) {
     replaceSelectedText(resultText);
     closeModal();
   };
+}
+
+function startStreamingResult({ originalText, action }) {
+  if (!modal) return;
+
+  const resultBox = modal.querySelector(".rf-result");
+  resultBox.textContent = "";
+  resultBox.dataset.text = "";
+
+  modal.querySelector(".rf-original").textContent = originalText;
+  modal.querySelector(".rf-action-badge").textContent = action;
+}
+
+function appendStreamingResult({ chunk }) {
+  if (!modal || !chunk) return;
+
+  const resultBox = modal.querySelector(".rf-result");
+  const nextText = `${resultBox.dataset.text || ""}${chunk}`;
+  resultBox.textContent = nextText;
+  resultBox.dataset.text = nextText;
 }
 
 function showError(message) {

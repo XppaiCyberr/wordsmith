@@ -31,6 +31,17 @@ export const PROVIDER_CONFIG = {
     defaultBaseUrl: "https://api.anthropic.com/v1",
     showBaseUrl: false,
   },
+  huggingface: {
+    label: "SmolLM2 Local",
+    apiKeyLabel: "Hugging Face Token",
+    apiKeyPlaceholder: "Not required",
+    apiKeyPrefix: "",
+    apiKeyRequired: false,
+    defaultModel: "HuggingFaceTB/SmolLM2-360M-Instruct",
+    defaultBaseUrl: "",
+    showApiKey: false,
+    showBaseUrl: false,
+  },
   local: {
     label: "Local AI",
     apiKeyLabel: "Local API Key",

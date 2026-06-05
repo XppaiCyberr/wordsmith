@@ -1,5 +1,6 @@
 // background.js - Service Worker
 
+import { env, pipeline, TextStreamer } from "@huggingface/transformers";
 import { DEFAULT_MENU_ITEMS } from "./menu-defaults.js";
 import { DEFAULT_AI_PROVIDER, PROVIDER_CONFIG } from "./provider-defaults.js";
 
@@ -7,7 +8,15 @@ const MENU_ITEMS_STORAGE_KEY = "menuItems";
 const AI_PROVIDER_STORAGE_KEY = "aiProvider";
 const PROVIDER_SETTINGS_STORAGE_KEY = "providerSettings";
 const LEGACY_API_KEY_STORAGE_KEY = "apiKey";
+const HUGGING_FACE_PROVIDER = "huggingface";
+const HUGGING_FACE_DTYPE = "q4";
+const HUGGING_FACE_MAX_NEW_TOKENS = 512;
 let rebuildContextMenusQueue = Promise.resolve();
+let huggingFaceGeneratorPromise = null;
+let huggingFaceGeneratorModel = "";
+let huggingFaceGenerationQueue = Promise.resolve();
+
+configureTransformersEnvironment();
 
 function cloneDefaultMenuItems() {
   return DEFAULT_MENU_ITEMS.map(item => ({ ...item }));
@@ -181,26 +190,44 @@ chrome.runtime.onInstalled.addListener(() => {
   Promise.all([
     ensureMenuItemsConfigured(),
     ensureProviderSettingsConfigured(),
-  ]).then(queueContextMenuRebuild);
+  ]).then(() => {
+    queueContextMenuRebuild();
+    warmHuggingFaceGeneratorIfSelected();
+  });
 });
 
 chrome.runtime.onStartup.addListener(() => {
   queueContextMenuRebuild();
+  warmHuggingFaceGeneratorIfSelected();
 });
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
-  if (message?.type !== "REBUILD_CONTEXT_MENUS") return false;
+  if (message?.type === "REBUILD_CONTEXT_MENUS") {
+    queueContextMenuRebuild()
+      .then(() => sendResponse({ ok: true }))
+      .catch(error => sendResponse({ ok: false, error: error.message }));
 
-  queueContextMenuRebuild()
-    .then(() => sendResponse({ ok: true }))
-    .catch(error => sendResponse({ ok: false, error: error.message }));
+    return true;
+  }
 
-  return true;
+  if (message?.type === "REWRITE_TEXT") {
+    handleRewriteTextMessage(message, _sender, sendResponse);
+    return true;
+  }
+
+  return false;
 });
 
 chrome.storage.onChanged.addListener((changes, areaName) => {
   if (areaName === "sync" && changes[MENU_ITEMS_STORAGE_KEY]) {
     queueContextMenuRebuild();
+  }
+
+  if (
+    areaName === "sync" &&
+    (changes[AI_PROVIDER_STORAGE_KEY] || changes[PROVIDER_SETTINGS_STORAGE_KEY])
+  ) {
+    warmHuggingFaceGeneratorIfSelected();
   }
 });
 
@@ -220,7 +247,8 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
   });
 
   try {
-    const result = await generateText(menuItem.prompt + selectedText);
+    const streamChunk = createTabStreamChunkSender(tab.id, selectedText, menuItem.title);
+    const result = await generateText(menuItem.prompt + selectedText, streamChunk);
 
     chrome.tabs.sendMessage(tab.id, {
       type: "SHOW_RESULT",
@@ -236,12 +264,41 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
   }
 });
 
-async function generateText(prompt) {
+async function handleRewriteTextMessage(message, sender, sendResponse) {
+  const text = typeof message.text === "string" ? message.text.trim() : "";
+  const prompt = typeof message.prompt === "string" && message.prompt.trim()
+    ? message.prompt
+    : text;
+
+  if (!prompt) {
+    sendResponse({ ok: false, error: "No text provided." });
+    return;
+  }
+
+  const tabId = sender.tab?.id || message.tabId;
+  const action = typeof message.action === "string" && message.action.trim()
+    ? message.action.trim()
+    : "Rewrite";
+  const streamChunk = tabId ? createTabStreamChunkSender(tabId, text, action) : null;
+
+  try {
+    const resultText = await generateText(prompt, streamChunk);
+    sendResponse({ ok: true, resultText });
+  } catch (error) {
+    sendResponse({ ok: false, error: error.message });
+  }
+}
+
+async function generateText(prompt, streamChunk) {
   const aiConfig = await getAiConfig();
   validateAiConfig(aiConfig);
 
   if (aiConfig.provider === "anthropic") {
     return generateAnthropicText(prompt, aiConfig);
+  }
+
+  if (aiConfig.provider === HUGGING_FACE_PROVIDER) {
+    return generateHuggingFaceText(prompt, aiConfig, streamChunk);
   }
 
   return generateOpenAiCompatibleText(prompt, aiConfig);
@@ -267,6 +324,154 @@ function validateAiConfig({ provider, providerConfig, settings }) {
   if (provider === "local" && !settings.baseUrl) {
     throw new Error("No local AI base URL set.");
   }
+}
+
+async function generateHuggingFaceText(prompt, { settings }, streamChunk) {
+  return queueHuggingFaceGeneration(async () => {
+    const { generator, device } = await getHuggingFaceGenerator(settings.model);
+    let streamedText = "";
+    let didStartStream = false;
+
+    const streamer = new TextStreamer(generator.tokenizer, {
+      skip_prompt: true,
+      callback_function: chunk => {
+        if (!chunk) return;
+
+        streamedText += chunk;
+
+        if (streamChunk) {
+          if (!didStartStream) {
+            streamChunk({ type: "start", device });
+            didStartStream = true;
+          }
+
+          streamChunk({ type: "chunk", chunk });
+        }
+      },
+    });
+
+    const output = await generator(
+      [{ role: "user", content: prompt }],
+      {
+        max_new_tokens: HUGGING_FACE_MAX_NEW_TOKENS,
+        do_sample: false,
+        temperature: 0.2,
+        streamer,
+      }
+    );
+    const result = extractGeneratedText(output, streamedText);
+
+    if (!result) {
+      throw new Error("SmolLM2 returned an empty response.");
+    }
+
+    return result;
+  });
+}
+
+function queueHuggingFaceGeneration(task) {
+  huggingFaceGenerationQueue = huggingFaceGenerationQueue.then(task, task);
+  return huggingFaceGenerationQueue;
+}
+
+async function getHuggingFaceGenerator(model) {
+  const modelId = model || PROVIDER_CONFIG[HUGGING_FACE_PROVIDER].defaultModel;
+
+  if (huggingFaceGeneratorPromise && huggingFaceGeneratorModel === modelId) {
+    return huggingFaceGeneratorPromise;
+  }
+
+  huggingFaceGeneratorModel = modelId;
+  huggingFaceGeneratorPromise = loadHuggingFaceGenerator(modelId, "webgpu")
+    .catch(async webgpuError => {
+      console.warn("SmolLM2 WebGPU initialization failed. Falling back to wasm.", webgpuError);
+      return loadHuggingFaceGenerator(modelId, "wasm");
+    })
+    .catch(error => {
+      huggingFaceGeneratorPromise = null;
+      huggingFaceGeneratorModel = "";
+      throw error;
+    });
+
+  return huggingFaceGeneratorPromise;
+}
+
+async function loadHuggingFaceGenerator(modelId, device) {
+  const generator = await pipeline(
+    "text-generation",
+    modelId,
+    {
+      device,
+      dtype: HUGGING_FACE_DTYPE,
+      progress_callback: progress => {
+        if (progress?.status === "ready") {
+          console.debug(`SmolLM2 ${device} pipeline ready.`);
+        }
+      },
+    }
+  );
+
+  return { generator, device };
+}
+
+async function warmHuggingFaceGeneratorIfSelected() {
+  try {
+    const aiConfig = await getAiConfig();
+
+    if (aiConfig.provider === HUGGING_FACE_PROVIDER) {
+      await getHuggingFaceGenerator(aiConfig.settings.model);
+    }
+  } catch (error) {
+    console.warn("SmolLM2 warmup failed.", error);
+  }
+}
+
+function extractGeneratedText(output, streamedText) {
+  const firstOutput = Array.isArray(output) ? output[0] : output;
+  const generatedText = firstOutput?.generated_text;
+
+  if (Array.isArray(generatedText)) {
+    const assistantMessage = [...generatedText]
+      .reverse()
+      .find(message => message?.role === "assistant" && typeof message.content === "string");
+
+    if (assistantMessage) return assistantMessage.content.trim();
+  }
+
+  if (typeof generatedText === "string") {
+    return generatedText.trim();
+  }
+
+  return String(streamedText || "").trim();
+}
+
+function createTabStreamChunkSender(tabId, originalText, action) {
+  return event => {
+    if (event.type === "start") {
+      sendTabMessage(tabId, {
+        type: "SHOW_STREAM_START",
+        originalText,
+        action,
+        device: event.device,
+      });
+      return;
+    }
+
+    if (event.type === "chunk") {
+      sendTabMessage(tabId, {
+        type: "SHOW_STREAM_CHUNK",
+        chunk: event.chunk,
+      });
+    }
+  };
+}
+
+function sendTabMessage(tabId, message) {
+  if (!tabId) return;
+
+  chrome.tabs.sendMessage(tabId, message, () => {
+    void chrome.runtime.lastError;
+  });
 }
 
 async function generateOpenAiCompatibleText(prompt, { provider, providerConfig, settings }) {
@@ -385,4 +590,12 @@ function buildChatCompletionsUrl(baseUrl) {
 
 function normalizeBaseUrl(baseUrl) {
   return String(baseUrl || "").trim().replace(/\/+$/, "");
+}
+
+function configureTransformersEnvironment() {
+  env.allowLocalModels = false;
+  env.allowRemoteModels = true;
+  env.useBrowserCache = true;
+  env.backends.onnx.wasm ??= {};
+  env.backends.onnx.wasm.proxy = false;
 }

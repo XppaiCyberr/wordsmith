@@ -13,7 +13,8 @@ Current version: `1.1.0`
 - Explain selected text like you are 5.
 - Add, remove, reset, and reorder context-menu actions from the popup.
 - Use custom prompts for your own text actions.
-- Choose Groq, OpenAI, Anthropic, or a local OpenAI-compatible AI server.
+- Choose Groq, OpenAI, Anthropic, SmolLM2 Local, or a local OpenAI-compatible AI server.
+- Run SmolLM2 locally in the MV3 background service worker with Transformers.js, WebGPU, and wasm fallback.
 
 ## Setup
 
@@ -34,6 +35,7 @@ Wordsmith supports:
 - `Groq` using `https://api.groq.com/openai/v1`.
 - `OpenAI` using `https://api.openai.com/v1`.
 - `Anthropic` using `https://api.anthropic.com/v1`.
+- `SmolLM2 Local` using `@huggingface/transformers` in Chrome.
 - `Local AI` using an OpenAI-compatible local endpoint.
 
 Default models:
@@ -41,7 +43,17 @@ Default models:
 - Groq: `llama-3.3-70b-versatile`
 - OpenAI: `gpt-4o-mini`
 - Anthropic: `claude-sonnet-4-20250514`
+- SmolLM2 Local: `HuggingFaceTB/SmolLM2-360M-Instruct`
 - Local AI: `llama3.2`
+
+### SmolLM2 Local
+
+The `SmolLM2 Local` provider runs entirely in Chrome's MV3 background service worker through `@huggingface/transformers` v3.
+
+- First use downloads `HuggingFaceTB/SmolLM2-360M-Instruct` from Hugging Face and caches model files through the browser Cache API.
+- The service worker warms the model on extension startup when `SmolLM2 Local` is the selected provider.
+- Generation tries WebGPU first with `{ device: "webgpu" }` and falls back to wasm with `{ device: "wasm" }` if WebGPU initialization fails.
+- Output streams into the result modal as tokens are generated.
 
 For Ollama, use:
 
@@ -100,6 +112,7 @@ Wordsmith was migrated from a root-level unpacked MV3 extension to a CRXJS/Vite 
 - The background service worker now runs as a module, which lets Vite bundle shared code instead of relying on `importScripts`.
 - `menu-defaults.js` and `provider-defaults.js` now export shared constants that the popup and background worker import directly.
 - `popup.html` now loads `popup.js` as a Vite module entry.
+- `@huggingface/transformers` is bundled into the background worker for the local SmolLM2 provider.
 - Chrome should load the generated `dist` directory, not the repository root.
 
 ## Permissions
@@ -112,6 +125,7 @@ Wordsmith uses:
 - `https://api.groq.com/*` to call Groq.
 - `https://api.openai.com/*` to call OpenAI.
 - `https://api.anthropic.com/*` to call Anthropic.
+- `https://huggingface.co/*`, `https://*.huggingface.co/*`, and `https://*.hf.co/*` to download and cache SmolLM2 model files.
 - `http://localhost/*` and `http://127.0.0.1/*` to call local AI servers.
 
 ## Author
@@ -126,6 +140,7 @@ Created by XppaiCyber.
 
 ### 1.1.0
 
+- Added SmolLM2 Local provider powered by `@huggingface/transformers` v3, WebGPU, and wasm fallback.
 - Added AI provider selection for Groq, OpenAI, Anthropic, and local OpenAI-compatible servers.
 - Added model and local base URL settings in the popup.
 - Expanded extension permissions for the supported AI providers.
