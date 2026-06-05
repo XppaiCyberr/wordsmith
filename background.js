@@ -251,8 +251,10 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
   const selectedText = info.selectionText.trim();
   const tabId = tab?.id;
 
+  await ensureTabContentScript(tabId);
+
   // Tell the content script to show loading state
-  sendTabMessage(tabId, {
+  await sendTabMessage(tabId, {
     type: "SHOW_LOADING",
     originalText: selectedText,
     action: menuItem.title,
@@ -652,10 +654,58 @@ function createTabStreamChunkSender(tabId, originalText, action) {
 }
 
 function sendTabMessage(tabId, message) {
-  if (!tabId) return;
+  if (!tabId) return Promise.resolve(false);
 
-  chrome.tabs.sendMessage(tabId, message, () => {
-    void chrome.runtime.lastError;
+  return new Promise(resolve => {
+    chrome.tabs.sendMessage(tabId, message, () => {
+      const error = chrome.runtime.lastError;
+      resolve(!error);
+    });
+  });
+}
+
+async function ensureTabContentScript(tabId) {
+  if (!tabId) return false;
+  if (await pingTabContentScript(tabId)) return true;
+
+  try {
+    await injectDeclaredContentScripts(tabId);
+  } catch (error) {
+    console.warn("Could not inject Wordsmith content script.", error);
+    return false;
+  }
+
+  return pingTabContentScript(tabId);
+}
+
+function pingTabContentScript(tabId) {
+  return new Promise(resolve => {
+    chrome.tabs.sendMessage(tabId, { type: "WORDSMITH_PING" }, response => {
+      const error = chrome.runtime.lastError;
+      resolve(!error && response?.ok === true);
+    });
+  });
+}
+
+async function injectDeclaredContentScripts(tabId) {
+  const contentScript = chrome.runtime.getManifest().content_scripts?.[0];
+  const cssFiles = contentScript?.css || [];
+  const jsFiles = contentScript?.js || [];
+
+  if (!jsFiles.length) {
+    throw new Error("No content script files are declared in the extension manifest.");
+  }
+
+  if (cssFiles.length) {
+    await chrome.scripting.insertCSS({
+      target: { tabId },
+      files: cssFiles,
+    });
+  }
+
+  await chrome.scripting.executeScript({
+    target: { tabId },
+    files: jsFiles,
   });
 }
 
