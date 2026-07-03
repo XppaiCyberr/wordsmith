@@ -1,0 +1,22 @@
+{
+  "name": "wordsmith",
+  "version": "1.1.0",
+  "description": "Highlight any text, right-click, and instantly polish it with Wordsmith.",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "check": "node --check background.js && node --check content.js && node --check popup.js && node --check menu-defaults.js && node --check provider-defaults.js"
+  },
+  "overrides": {
+    "rollup": "2.80.0"
+  },
+  "devDependencies": {
+    "@crxjs/vite-plugin": "^2.4.0",
+    "vite": "^8.0.16"
+  },
+  "dependencies": {
+    "@huggingface/transformers": "^3.8.1"
+  }
+}

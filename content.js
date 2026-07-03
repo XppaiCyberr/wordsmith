@@ -1,19 +1,45 @@
 // content.js - Injected into every page
 
-let modal = null;
+(() => {
 
-chrome.runtime.onMessage.addListener((msg) => {
-  if (msg.type === "SHOW_LOADING") showModal(msg);
-  if (msg.type === "SHOW_RESULT")  updateModal(msg);
-  if (msg.type === "SHOW_ERROR")   showError(msg.error);
-});
+const WORDSMITH_CONTENT_STATE_KEY = "__wordsmithContentState";
+const wordsmithState = globalThis[WORDSMITH_CONTENT_STATE_KEY] ||= {
+  listenerInstalled: false,
+  modal: null,
+};
+
+if (!wordsmithState.listenerInstalled) {
+  chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+    if (msg.type === "WORDSMITH_PING") {
+      sendResponse({ ok: true });
+      return false;
+    }
+
+    if (msg.type === "SHOW_LOADING") showModal(msg);
+    if (msg.type === "SHOW_STREAM_START") startStreamingResult(msg);
+    if (msg.type === "SHOW_STREAM_CHUNK") appendStreamingResult(msg);
+    if (msg.type === "SHOW_RESULT")  updateModal(msg);
+    if (msg.type === "SHOW_ERROR")   showError(msg.error);
+
+    return false;
+  });
+
+  wordsmithState.listenerInstalled = true;
+}
 
 function getOrCreateModal() {
-  if (modal) return modal;
+  if (wordsmithState.modal?.isConnected) return wordsmithState.modal;
 
-  modal = document.createElement("div");
+  const existingModal = document.getElementById("refactor-modal-root");
+  if (existingModal) {
+    wordsmithState.modal = existingModal;
+    return wordsmithState.modal;
+  }
+
+  const modal = document.createElement("div");
   modal.id = "refactor-modal-root";
   document.body.appendChild(modal);
+  wordsmithState.modal = modal;
 
   modal.innerHTML = `
     <div class="rf-backdrop"></div>
@@ -52,7 +78,7 @@ function getOrCreateModal() {
   modal.querySelector(".rf-backdrop").addEventListener("click", closeModal);
 
   document.addEventListener("keydown", (e) => {
-    if (e.key === "Escape" && modal?.classList.contains("rf-open")) closeModal();
+    if (e.key === "Escape" && wordsmithState.modal?.classList.contains("rf-open")) closeModal();
   });
 
   // Copy button
@@ -84,6 +110,7 @@ function showModal({ originalText, action }) {
 }
 
 function updateModal({ originalText, resultText, action }) {
+  const modal = wordsmithState.modal;
   if (!modal) return;
 
   const resultBox = modal.querySelector(".rf-result");
@@ -101,7 +128,30 @@ function updateModal({ originalText, resultText, action }) {
   };
 }
 
+function startStreamingResult({ originalText, action }) {
+  const modal = wordsmithState.modal;
+  if (!modal) return;
+
+  const resultBox = modal.querySelector(".rf-result");
+  resultBox.textContent = "";
+  resultBox.dataset.text = "";
+
+  modal.querySelector(".rf-original").textContent = originalText;
+  modal.querySelector(".rf-action-badge").textContent = action;
+}
+
+function appendStreamingResult({ chunk }) {
+  const modal = wordsmithState.modal;
+  if (!modal || !chunk) return;
+
+  const resultBox = modal.querySelector(".rf-result");
+  const nextText = `${resultBox.dataset.text || ""}${chunk}`;
+  resultBox.textContent = nextText;
+  resultBox.dataset.text = nextText;
+}
+
 function showError(message) {
+  const modal = wordsmithState.modal;
   if (!modal) return;
   const resultBox = modal.querySelector(".rf-result");
   resultBox.innerHTML = "";
@@ -113,6 +163,7 @@ function showError(message) {
 }
 
 function closeModal() {
+  const modal = wordsmithState.modal;
   if (!modal) return;
   modal.classList.remove("rf-open");
 }
@@ -125,3 +176,4 @@ function replaceSelectedText(newText) {
   range.insertNode(document.createTextNode(newText));
   sel.removeAllRanges();
 }
+})();

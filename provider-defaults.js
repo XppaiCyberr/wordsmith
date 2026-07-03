@@ -1,6 +1,6 @@
-globalThis.DEFAULT_AI_PROVIDER = "groq";
+export const DEFAULT_AI_PROVIDER = "groq";
 
-globalThis.PROVIDER_CONFIG = {
+export const PROVIDER_CONFIG = {
   groq: {
     label: "Groq",
     apiKeyLabel: "Groq API Key",
@@ -29,6 +29,17 @@ globalThis.PROVIDER_CONFIG = {
     apiKeyRequired: true,
     defaultModel: "claude-sonnet-4-20250514",
     defaultBaseUrl: "https://api.anthropic.com/v1",
+    showBaseUrl: false,
+  },
+  huggingface: {
+    label: "SmolLM2 Local",
+    apiKeyLabel: "Hugging Face Token",
+    apiKeyPlaceholder: "Not required",
+    apiKeyPrefix: "",
+    apiKeyRequired: false,
+    defaultModel: "HuggingFaceTB/SmolLM2-360M-Instruct",
+    defaultBaseUrl: "",
+    showApiKey: false,
     showBaseUrl: false,
   },
   local: {
